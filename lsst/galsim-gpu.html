@@ -1,0 +1,25 @@
+<html>
+  <head>
+    <title>Running GalSim on GPU on Perlmutter</title>
+  </head>
+  <body>
+    <h1>Running GalSim on GPU on Perlmutter</h1>
+    <p>First, load the Clang module with support for OpenMP Target Offload:</p>
+    <pre>
+  module use /global/cfs/cdirs/nstaff/cookbg/pe/modulefiles
+  ml npe
+  ml PrgEnv-llvm
+    </pre>
+    <p>Install and activate a suitable Python environment (e.g. with Miniconda), and install FFTW (including shared libraries). Set <tt>FFTW_DIR</tt> to point to where FFTW is installed. Set the compiler to Clang:</p>
+    <pre>
+  export CC=clang
+  export CXX=clang++
+    </pre>
+    <p>Check out the GalSim source code, then install the requirements and GalSim itself using pip:</p>
+    <pre>
+  pip install -r requirements.txt
+  pip install .
+    </pre>
+    <p>By default, GPUs will be used when available. To disable GPU offloading and run on the CPU without having to recompile, set <tt>OMP_TARGET_OFFLOAD=DISABLED</tt>. To get very detailed debug information you can set <tt>LIBOMPTARGET_INFO=-1</tt> before running GalSim.</p>
+  </body>
+</html>
