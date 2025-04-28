@@ -1,0 +1,194 @@
+<html>
+  <head>
+    <title>CILogon token testing with Rucio</title>
+  </head>
+  <body>
+    <h1>CILogon token testing with Rucio</h1>
+
+    <p>Note: if you are using the CILogon test instance rather than the production instance, replace <tt>https://cilogon.org</tt> with <tt>https://test.cilogon.org</tt> wherever it occurs in these instructions.
+    
+    <h2>User auth testing</h2>
+    
+    <p>First, I registered two clients with CILogon for testing purposes. Obviously in production, the official clients for DUNE will have to be used instead.</p>
+    
+    <p>Check out a clean copy of the Rucio master branch and use the Docker compose for testing. Edit <tt>etc/docker/dev/rucio/idpsecrets.json</tt> to contain the following:</p>
+    
+    <pre>
+{
+    "CILogon": {
+        "issuer": "https://cilogon.org/",
+	"redirect_uris": [
+	    "https://localhost/auth/oidc_token",
+	    "https://localhost/auth/oidc_code"
+	],
+	"client_id": "[client ID of first client]",
+	"client_secret": "[secret of first client]",
+
+	"SCIM": {
+	    "client_id": "[client ID of second client]",
+	    "client_secret": "[secret of second client]"
+	}
+    }
+}
+    </pre>
+    
+    <p>(My redirect URIs were set to <tt>localhost</tt> as I was running the server and client on the same machine for testing. In production these should point to the actual Rucio server).</p>
+
+    <p>Add this to the bottom of the <tt>rucio:</tt> section in <tt>etc/docker/dev/docker-compose.yml</tt> so that the Rucio server's https port is visible from outside the container:</p>
+
+    <pre>
+  ports:
+    - "127.0.0.1:443:443"      
+    </pre>
+
+    <p>Start up the docker compose:</p>
+
+    <pre>
+  sudo docker-compose --file etc/docker/dev/docker-compose.yml --profile storage up -d
+    </pre>
+
+    <p>Open a shell inside the Rucio server container:</p>
+
+    <pre>
+  sudo docker exec -it dev-rucio-1 /bin/bash
+    </pre>
+
+    <p>Edit <tt>etc/rucio.cfg</tt>. You can use <tt>vi</tt> for this or copy in a pre-edited file. Change <tt>[oidc] admin_issuer</tt> to <tt>CILogon</tt>. Add <tt>supports_audience = False</tt>, also in the <tt>[oidc]</tt> section.</p>
+
+    <p>Run <tt>tools/run_tests.sh -i</tt> to initialise the database etc. Then create an account and map some identities to it:</p>
+
+    <pre>
+  rucio-admin account add rucio_admin_account
+  rucio-admin identity add --account rucio_admin_account --type OIDC --id "SUB=[client 1 ID], ISS=https://cilogon.org/" --email "j.perry@epcc.ed.ac.uk"
+  rucio-admin identity add --account rucio_admin_account --type OIDC --id "SUB=[client 2 ID], ISS=https://cilogon.org/" --email "j.perry@epcc.ed.ac.uk"
+  rucio-admin identity add --account rucio_admin_account --type OIDC --id "SUB=http://cilogon.org/serverE/users/199883, ISS=https://cilogon.org" --email "j.perry@epcc.ed.ac.uk"
+    </pre>
+
+    <p>Substitute your own email address and your own CILogon subject for mine. Note that the missing final slash on <tt>cilogon.org</tt> is intentional.<p>
+
+    <p>It should now be possible to run a client command with OIDC authentication:</p>
+
+    <pre>
+  rucio -a=rucio_admin_account -S=OIDC -v whoami
+    </pre>
+
+    <p>Or for more recent rucio versions:</p>
+
+    <pre>
+  rucio --account rucio_admin_account -S oidc -v whoami
+    </pre>
+
+    <p>This should give you a URL that you can paste into a web browser. It will redirect you to CILogon where you can authenticate, then receive a code which you can copy and paste into the Rucio client console.</p>
+
+    <p>To stop docker compose:</p>
+
+    <pre>
+  sudo docker-compose --file etc/docker/dev/docker-compose.yml --profile storage down
+  sudo docker system prune -f --volumes
+    </pre>
+
+    <h2>FTS and RSE auth testing</h2>
+
+    <p>Setting up a FTS transfer using tokens is slightly more complex. It can also be done with the Rucio docker compose. Check out a clean copy of the Rucio code. Edit <tt>etc/docker/dev/rucio/idpsecrets.json</tt> as above for the user auth testing. Now edit <tt>etc/docker/dev/docker-compose.yml</tt> and add two additional volumes to the <tt>xrd4</tt> section:</p>
+
+    <pre>
+      - ./xrd/entrypoint.sh:/docker-entrypoint.sh:ro
+      - ./xrd:/configs:ro
+    </pre>
+
+    <p>The purpose of these is to enable token authentication on XRD4 (it should already be enabled on XRD5).</p>
+
+    <p>Edit <tt>etc/docker/dev/fts/fts3restconfig</tt>. Replace the <tt>[providers]</tt> section with:</p>
+
+    <pre>
+  [providers]
+  provider1 = https://cilogon.org/
+  provider1_ClientId = [CILogon client ID]
+  provider1_ClientSecret = [CILogon client secret]
+    </pre>
+
+    <p>Edit <tt>etc/docker/dev/xrd/scitokens.cfg</tt>. Add:</p>
+
+    <pre>
+  [Issuer CILogon]
+  issuer = https://cilogon.org
+  base_path = /rucio
+    </pre>
+
+    <p>Edit <tt>tools/docker_activate_rses.sh</tt> and add the davs protocol for XRD4. Add this line below the root protocol line:</p>
+
+    <pre>
+      rucio-admin rse add-protocol --hostname xrd4 --scheme davs --prefix //rucio --port 1097 --impl rucio.rse.protocols.gfal.Default --domain-json '{"wan": {"read": 2, "write": 2, "delete": 2, "third_party_copy_read": 2, "third_party_copy_write": 2}, "lan": {"read": 2, "write": 2, "delete": 2}}' XRD4
+    </pre>
+
+    <p>Now comment out or remove the lines adding the root protocol for both XRD4 and XRD5. Token authentication only works with davs for now.</p>
+
+    <p>Start up the docker compose:</p>
+
+    <pre>
+  sudo docker-compose --file etc/docker/dev/docker-compose.yml --profile storage up -d
+    </pre>
+
+    <p>The CILogon provider needs to be added to the FTS server's database. To do this, first open a shell in the FTS DB container:</p>
+
+    <pre>
+  sudo docker exec -it rucio-ftsdb-1 /bin/bash
+    </pre>
+
+    <p>Add CILogon to the database table:</p>
+
+    <pre>
+  mysql -u fts -p
+  [type password 'fts']
+  use fts;
+  insert into t_token_provider(name, issuer, client_id, client_secret) values('CILogon', 'https://cilogon.org/', '[client ID]', '[client secret]');
+    </pre>
+
+    <p>You might have to wait a few minutes for the database server to fully start up before you can connect to it.</p>
+
+    <p>Now exit the FTS DB container and open a shell on the Rucio server container:</p>
+
+    <pre>
+  sudo docker exec -it dev-rucio-1 /bin/bash
+    </pre>
+
+    <p>Edit <tt>etc/rucio.cfg</tt>. Change <tt>[oidc] admin_issuer</tt> to <tt>CILogon</tt>. Add <tt>supports_audience = False</tt> to the same section. In the <tt>[conveyor]</tt> section, add <tt>poller_oidc_support = True</tt>.</p>
+
+    <p>Set up the server and RSEs:</p>
+
+    <pre>
+      tools/run_tests.sh -ir
+    </pre>
+
+    <p>This may take a while to work. Next, set both RSEs that we'll be using to support token auth:</p>
+
+    <pre>
+  rucio-admin rse set-attribute --rse XRD4 --key oidc_support --value True
+  rucio-admin rse set-attribute --rse XRD5 --key oidc_support --value True
+    </pre>
+
+    <p>Upload a test file to XRD4 and attach it to a dataset:</p>
+
+    <pre>
+  cp file4 file5
+  rucio upload --rse XRD4 --scope test file5
+    </pre>
+
+    <p>Replicate it to XRD5:</p>
+
+    <pre>
+  rucio add-dataset test:dataset4
+  rucio attach test:dataset4 test:file5
+  rucio add-rule test:dataset4 1 XRD5
+  rucio rule-info [rule ID]
+  rucio-conveyor-submitter --run-once
+  rucio-conveyor-poller --run-once --older-than 0
+  rucio-conveyor-finisher --run-once
+  rucio rule-info [rule ID]
+    </pre>
+
+    <p>If all goes well, this should replicate <tt>file5</tt> from XRD4 to XRD5 using token authentication.</p>
+    
+  </body>
+</html>
+
